@@ -35,13 +35,14 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     qt_add_executable(TingTaoHelper
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
-        core_screencapturer.h core_screencapturer.cpp
+        core_screencapturer.cpp
         core_imageprocessor.h core_imageprocessor.cpp
         core_datamanager.h core_datamanager.cpp
         core_modeltrainer.h core_modeltrainer.cpp
         core_decisionengine.h core_decisionengine.cpp
         ai_inferenceengine.h ai_inferenceengine.cpp
         ai_modelwrapper.h ai_modelwrapper.cpp
+        core_screencapturer.h
 
     )
 # Define target properties for Android with Qt 6 as:
