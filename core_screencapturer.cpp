@@ -1,55 +1,90 @@
-// screen_capturer.cpp
+/* screenshooter.cpp */
 #include "core_screencapturer.h"
-#include <QGuiApplication>
-#include <QScreen>
-#include <QWindow>
-
-QList<QRect> ScreenCapturer::getScreenResolutions()
+#include <QThread>
+#include<QTime>
+// 单例实例指针初始化
+ScreenShooter* ScreenShooter::instance()
 {
-    QList<QRect> resolutions;
-    const auto screens = QGuiApplication::screens();
-
-    for (const QScreen* screen : screens) {
-        resolutions.append(screen->geometry());
-    }
-    return resolutions;
+    static ScreenShooter instance;
+    return &instance;
 }
 
-QPixmap ScreenCapturer::captureScreen()
+// 构造函数初始化定时器
+ScreenShooter::ScreenShooter(QObject *parent)
+    : QObject(parent)
 {
-    // 获取物理屏幕尺寸
-    const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-    const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    const int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    const int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    m_timer = new QTimer(this);
+    // 设置单次触发定时器（更精确控制时间间隔）
+    m_timer->setSingleShot(true);
 
-    // 创建设备上下文
-    HDC hdcScreen = GetDC(nullptr);
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
-    HBITMAP hBitmap = CreateCompatibleBitmap(hdcScreen, width, height);
+    // 连接定时器信号到截图槽
+    connect(m_timer, &QTimer::timeout, this, &ScreenShooter::captureFrame);
+}
 
-    // 使用RAII守卫自动释放资源
-    GDIObjGuard bitmapGuard(hBitmap);
-    DCGuard dcGuard(hdcMem);
+QSize ScreenShooter::getPrimaryScreenResolution()
+{
+    // 获取主屏幕对象
+    QScreen* primaryScreen = QGuiApplication::primaryScreen();
+    if(!primaryScreen){
+        qWarning() << "无法获取主屏幕信息";
+        return QSize(0, 0);
+    }
+    // 返回屏幕的物理分辨率
+    return primaryScreen->geometry().size();
+}
 
-    SelectObject(hdcMem, hBitmap);
-    BitBlt(hdcMem, 0, 0, width, height, hdcScreen, x, y, SRCCOPY);
-    ReleaseDC(nullptr, hdcScreen);
+void ScreenShooter::setInterval(int ms)
+{
+    // 限制最小间隔为10ms（保护低端CPU）
+    m_interval = qMax(10, ms);
+}
 
-    // 获取DIB数据
-    BITMAPINFOHEADER bmi = {0};
-    bmi.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.biWidth = width;
-    bmi.biHeight = -height; // 顶向下的位图
-    bmi.biPlanes = 1;
-    bmi.biBitCount = 32;
-    bmi.biCompression = BI_RGB;
+void ScreenShooter::start()
+{
+    if(m_isRunning) return;
 
-    QImage image(width, height, QImage::Format_ARGB32);
-    GetDIBits(hdcMem, hBitmap, 0, height, image.bits(), (BITMAPINFO*)&bmi, DIB_RGB_COLORS);
+    m_isRunning = true;
+    // 立即触发第一次截图
+    QMetaObject::invokeMethod(this, &ScreenShooter::captureFrame,
+                              Qt::QueuedConnection);
+}
 
-    // 修复颜色通道顺序（BGRA -> ARGB）
-    image = image.rgbSwapped();
+void ScreenShooter::stop()
+{
+    m_isRunning = false;
+    m_timer->stop();
+}
 
-    return QPixmap::fromImage(image);
+bool ScreenShooter::isRunning() const
+{
+    return m_isRunning;
+}
+
+void ScreenShooter::captureFrame()
+{
+    if(!m_isRunning) return;
+
+    // 记录开始时间用于精确控制间隔
+    auto startTime = QDateTime::currentDateTime();
+
+    // 获取主屏幕对象
+    QScreen* screen = QGuiApplication::primaryScreen();
+    if(screen){
+        // 使用grabWindow方法获取全屏截图（效率最高）
+        QPixmap screenshot = screen->grabWindow(0);
+        if(!screenshot.isNull()){
+            // 发送截图信号（使用const引用减少拷贝开销）
+            emit screenshotTaken(screenshot);
+        }
+    }
+
+    // 计算实际耗时
+    auto elapsed = startTime.msecsTo(QDateTime::currentDateTime());
+    // 动态调整下次触发时间（保持精确间隔）
+    int nextInterval = qMax(0, m_interval - elapsed);
+
+    // 如果仍在运行状态，则再次启动定时器
+    if(m_isRunning){
+        m_timer->start(nextInterval);
+    }
 }
